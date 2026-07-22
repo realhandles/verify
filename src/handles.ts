@@ -73,6 +73,22 @@ export const RESERVED_WORDS = new Set([
   'team', 'security', 'abuse', 'legal', 'privacy', 'terms', 'status', 'docs', 'blog',
 ]);
 
+// Operator-curated aliases: a reserved handle that points to a canonical
+// identity's username. This lets the operator hand a scarce or vanity handle
+// (e.g. a founder's short name) to an existing identity that the automatic gate
+// would not grant, because the gate keys on an exact handle match. An alias can
+// NEVER be claimed by anyone (it is treated as reserved), and the public profile
+// route 301-redirects /<alias> to /<target>. Keys and values are lowercase.
+export const HANDLE_ALIASES: Record<string, string> = {
+  david: 'davidvkimball',
+};
+
+/** The canonical username an alias points to, or null if the handle is not one. */
+export function aliasTarget(username: string): string | null {
+  const u = normalizeHandle(username);
+  return Object.hasOwn(HANDLE_ALIASES, u) ? HANDLE_ALIASES[u] : null;
+}
+
 export function normalizeHandle(s: string): string {
   // Strip a leading @ (and any spaces) so users can type "@name" or "name".
   return s.trim().replace(/^@+/, '').toLowerCase();
@@ -296,7 +312,9 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
   const tier = tierFor(u);
   const basis = bestClaim(u, proofs);
   const score = basis?.score ?? 0;
-  const reservedWord = RESERVED_WORDS.has(u);
+  // Alias handles are reserved too: they already point to a canonical identity,
+  // so no one else can claim them.
+  const reservedWord = RESERVED_WORDS.has(u) || Object.hasOwn(HANDLE_ALIASES, u);
   const valid = isValidFormat(u) && !reservedWord && u.length >= 1;
   const qualifies = valid && score >= tier.minScore;
 
