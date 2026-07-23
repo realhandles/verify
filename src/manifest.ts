@@ -73,6 +73,21 @@ export interface PointerFile {
   keyId: string;
 }
 
+// A key rotation: this manifest is signed by a NEW key, and `prevKeySig` is the
+// OLD key's signature authorizing the handoff. Continuity follows the key: a
+// verifier that trusted the old key accepts the new one because the old key
+// vouched for it. The old key's PUBLIC key comes from the previous chain entry.
+export interface Rotation {
+  prevKeyId: string; // keyId of the key being rotated away from
+  prevKeySig: string; // compact JWS by the previous key over rotationStatement(...)
+}
+
+// The exact bytes the PREVIOUS key signs to authorize a rotation to `newKeyId` at
+// a given chain position. Signer and verifier must agree on this string.
+export function rotationStatement(newKeyId: string, seq: number, prev: string | null): string {
+  return `rh-rotate:v1:${newKeyId}:${seq}:${prev ?? ''}`;
+}
+
 export interface Manifest {
   version: string;
   subject: {
@@ -92,6 +107,7 @@ export interface Manifest {
   // (seq 0, prev null). See verifyChain.
   seq?: number; // 0-based, increments by 1 per re-sign
   prev?: string | null; // base64url(SHA-256(previous manifest JWS)), null at genesis
+  rotation?: Rotation; // present only when this entry changes the signing key
 }
 
 // The file we serve / hand the user to host. `jws` is authoritative; the
@@ -217,30 +233,64 @@ export interface ChainResult {
  * Verify an identity's manifest history is a well-formed append-only chain.
  * Entries must be ordered oldest-first (as served at
  * /<handle>/realhandles-chain.json). Checks that every entry verifies, `seq`
- * starts at 0 and increments by 1, each `prev` equals the hash of the previous
- * entry's JWS, and every entry is signed by the same key. (Key rotation, where
- * the key may change with proof from the old key, is a later addition.)
+ * starts at 0 and increments by 1, and each `prev` equals the hash of the
+ * previous entry's JWS. The signing key must stay the same UNLESS an entry
+ * carries a valid `rotation`: then the change is accepted because the previous
+ * key signed a statement authorizing the new one (continuity follows the key).
+ *
+ * `keyId` in the result is the CURRENT key (after any rotations). If
+ * `expectedKeyId` is given, it must equal the GENESIS key: you pin a key the
+ * first time you see an identity, and the chain proves the current key from it.
  */
 export async function verifyChain(
   entries: Pick<SignedManifestFile, 'jws'>[],
   expectedKeyId?: string
 ): Promise<ChainResult> {
-  let keyId: string | undefined;
+  let trustedKeyId: string | undefined; // the key the chain currently trusts
+  let trustedPubKey: JWK | undefined; // its public JWK, to check a rotation signature
+  let genesisKeyId: string | undefined;
   let prevHash: string | null = null;
   for (let i = 0; i < entries.length; i++) {
-    const res = await verifySignedManifest(entries[i], expectedKeyId);
+    const res = await verifySignedManifest(entries[i]);
     if (!res.valid || !res.manifest) {
       return { valid: false, reason: `Entry ${i}: ${res.reason ?? 'signature did not verify'}`, length: entries.length };
     }
-    const seq = res.manifest.seq ?? 0;
+    const m = res.manifest;
+    const seq = m.seq ?? 0;
     if (seq !== i) return { valid: false, reason: `Entry ${i}: seq is ${seq}, expected ${i}.`, length: entries.length };
-    const prev = res.manifest.prev ?? null;
+    const prev = m.prev ?? null;
     if (prev !== prevHash) return { valid: false, reason: `Entry ${i}: prev does not match the previous entry.`, length: entries.length };
-    if (keyId === undefined) keyId = res.keyId;
-    else if (res.keyId !== keyId) return { valid: false, reason: `Entry ${i}: signed by a different key than the chain started with.`, length: entries.length };
+
+    const entryKeyId = res.keyId!;
+    if (trustedKeyId === undefined) {
+      trustedKeyId = entryKeyId;
+      genesisKeyId = entryKeyId;
+      trustedPubKey = m.subject.publicKey;
+    } else if (entryKeyId !== trustedKeyId) {
+      // The key changed: only allowed with a rotation the previous key authorized.
+      const rot = m.rotation;
+      if (!rot) return { valid: false, reason: `Entry ${i}: key changed without a rotation.`, length: entries.length };
+      if (rot.prevKeyId !== trustedKeyId) return { valid: false, reason: `Entry ${i}: rotation.prevKeyId is not the chain's current key.`, length: entries.length };
+      try {
+        const oldKey = await importJWK(trustedPubKey!, SIGNING_ALG);
+        const { payload } = await compactVerify(rot.prevKeySig, oldKey);
+        if (new TextDecoder().decode(payload) !== rotationStatement(entryKeyId, seq, prev)) {
+          return { valid: false, reason: `Entry ${i}: rotation attestation does not match this entry.`, length: entries.length };
+        }
+      } catch {
+        return { valid: false, reason: `Entry ${i}: rotation not signed by the previous key.`, length: entries.length };
+      }
+      trustedKeyId = entryKeyId; // continuity: trust transfers to the new key
+      trustedPubKey = m.subject.publicKey;
+    } else {
+      trustedPubKey = m.subject.publicKey;
+    }
     prevHash = await manifestJwsHash(entries[i].jws);
   }
-  return { valid: true, keyId, length: entries.length };
+  if (expectedKeyId && genesisKeyId !== expectedKeyId) {
+    return { valid: false, reason: 'Chain does not start with the expected (pinned) key.', length: entries.length };
+  }
+  return { valid: true, keyId: trustedKeyId, length: entries.length };
 }
 
 /** Verify a signed pointer file (used for the "upload once" anchor). */
