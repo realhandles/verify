@@ -182,7 +182,10 @@ export function proofStrength(username: string, p: Proof): number {
   if (p.kind === 'domain' && p.domain) {
     if (domainLabel(p.domain) !== u) return 0;
     const tld = domainTld(p.domain);
-    return TLD_SCORE[tld] ?? (STRONG_TLDS.has(tld) ? 80 : 70);
+    // .com is top; a curated set of established TLDs is strong; everything else
+    // scores below the gating threshold so a throwaway/cheap TLD (buy ben.xyz for
+    // a dollar) cannot clear a scarce name. It still adds to the trust score.
+    return TLD_SCORE[tld] ?? (STRONG_TLDS.has(tld) ? 80 : 30);
   }
   if (p.kind === 'platform' && p.platform && p.handle) {
     if (normalizeHandle(p.handle) !== u) return 0;
@@ -274,18 +277,18 @@ export function tierFor(username: string): Tier {
       note: 'Very short handles need a matching .com you control, or a matching handle on a tier-1 platform (X, YouTube, TikTok, Instagram, LinkedIn).',
     };
   }
-  if (len <= 5) {
+  if (len <= 8) {
     return {
       name: 'premium',
       minScore: 40,
-      label: 'Premium (3-5 characters)',
-      note: 'Short handles need at least one matching verified account or domain before you can claim them.',
+      label: 'Protected (3-8 characters)',
+      note: 'Handles of 8 characters or fewer need at least one matching verified account (on a key platform) or a domain you control before you can claim them.',
     };
   }
   return {
     name: 'open',
     minScore: 0,
-    label: 'Open (6+ characters)',
+    label: 'Open (9+ characters)',
     note: 'This handle is open to claim. A matching verified account or domain adds a namesake badge.',
   };
 }
@@ -335,7 +338,7 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
   const howToQualify: string[] = [];
   if (!qualifies && !reservedWord && isValidFormat(u)) {
     howToQualify.push(`Verify @${u} on a key platform (X, YouTube, TikTok, Instagram, LinkedIn, or GitHub).`);
-    howToQualify.push(`Prove you control ${u}.com (or another TLD) via the domain challenge.`);
+    howToQualify.push(`Prove you control ${u}.com (or another established TLD) via the domain challenge.`);
   }
 
   return { username: u, valid, reservedWord, tier, score, basis, qualifies, message, howToQualify };
