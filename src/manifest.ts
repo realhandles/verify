@@ -86,6 +86,12 @@ export interface Manifest {
   anchor?: Anchor; // one rotatable pointer; NOT the identity
   issued: string; // ISO 8601
   statement: string; // human-readable claim
+  // Sigchain: position in the identity's signed history + a hash link to the
+  // previous manifest, making the history append-only and tamper-evident. Both
+  // optional for backward compatibility: a manifest without them is genesis
+  // (seq 0, prev null). See verifyChain.
+  seq?: number; // 0-based, increments by 1 per re-sign
+  prev?: string | null; // base64url(SHA-256(previous manifest JWS)), null at genesis
 }
 
 // The file we serve / hand the user to host. `jws` is authoritative; the
@@ -119,6 +125,17 @@ const b64u = {
 export async function keyIdFromJwk(jwk: JWK): Promise<string> {
   const canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return b64u.encode(new Uint8Array(digest));
+}
+
+/**
+ * base64url(SHA-256(compact JWS)). The next manifest puts this in its `prev`
+ * field to chain to this one, making the signed history append-only and
+ * tamper-evident: you cannot rewrite a past entry without breaking every hash
+ * link that follows it.
+ */
+export async function manifestJwsHash(jws: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(jws));
   return b64u.encode(new Uint8Array(digest));
 }
 
@@ -187,6 +204,43 @@ export async function verifySignedManifest(
   }
 
   return { valid: true, manifest: verified, keyId: computedKeyId };
+}
+
+export interface ChainResult {
+  valid: boolean;
+  reason?: string;
+  keyId?: string;
+  length: number;
+}
+
+/**
+ * Verify an identity's manifest history is a well-formed append-only chain.
+ * Entries must be ordered oldest-first (as served at
+ * /<handle>/realhandles-chain.json). Checks that every entry verifies, `seq`
+ * starts at 0 and increments by 1, each `prev` equals the hash of the previous
+ * entry's JWS, and every entry is signed by the same key. (Key rotation, where
+ * the key may change with proof from the old key, is a later addition.)
+ */
+export async function verifyChain(
+  entries: Pick<SignedManifestFile, 'jws'>[],
+  expectedKeyId?: string
+): Promise<ChainResult> {
+  let keyId: string | undefined;
+  let prevHash: string | null = null;
+  for (let i = 0; i < entries.length; i++) {
+    const res = await verifySignedManifest(entries[i], expectedKeyId);
+    if (!res.valid || !res.manifest) {
+      return { valid: false, reason: `Entry ${i}: ${res.reason ?? 'signature did not verify'}`, length: entries.length };
+    }
+    const seq = res.manifest.seq ?? 0;
+    if (seq !== i) return { valid: false, reason: `Entry ${i}: seq is ${seq}, expected ${i}.`, length: entries.length };
+    const prev = res.manifest.prev ?? null;
+    if (prev !== prevHash) return { valid: false, reason: `Entry ${i}: prev does not match the previous entry.`, length: entries.length };
+    if (keyId === undefined) keyId = res.keyId;
+    else if (res.keyId !== keyId) return { valid: false, reason: `Entry ${i}: signed by a different key than the chain started with.`, length: entries.length };
+    prevHash = await manifestJwsHash(entries[i].jws);
+  }
+  return { valid: true, keyId, length: entries.length };
 }
 
 /** Verify a signed pointer file (used for the "upload once" anchor). */
