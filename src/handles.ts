@@ -71,6 +71,12 @@ export const RESERVED_WORDS = new Set([
   'assets', '_astro', 'static', 'favicon', 'robots', 'sitemap', 'realhandles', 'u',
   'support', 'help', 'root', 'www', 'mail', 'official', 'staff', 'mod', 'moderator',
   'team', 'security', 'abuse', 'legal', 'privacy', 'terms', 'status', 'docs', 'blog',
+  // Current page slugs (a static page shadows a [username] match, so these must
+  // never be claimable) plus a curated set reserved for likely future pages, so
+  // we can ship them without bumping anyone off their handle.
+  'directory', 'spec', 'compare', 'report', 'settings', 'account', 'dashboard',
+  'contact', 'pricing', 'faq', 'explore', 'search', 'discover', 'profile', 'me',
+  'home', 'new', 'edit', 'onboarding', 'welcome',
 ]);
 
 // Operator-curated aliases: a reserved handle that points to a canonical
