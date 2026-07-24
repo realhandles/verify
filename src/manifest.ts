@@ -73,19 +73,109 @@ export interface PointerFile {
   keyId: string;
 }
 
-// A key rotation: this manifest is signed by a NEW key, and `prevKeySig` is the
-// OLD key's signature authorizing the handoff. Continuity follows the key: a
-// verifier that trusted the old key accepts the new one because the old key
-// vouched for it. The old key's PUBLIC key comes from the previous chain entry.
+// A key rotation: this manifest is signed by a NEW key, and the rotation carries
+// proof that the change was authorized. Continuity follows the key: a verifier
+// that trusted the old key accepts the new one because something the old key had
+// already vouched for says so.
+//
+// TWO ways to authorize, and exactly one of them must hold:
+//
+//  1. `prevKeySig`: the OLD key itself signs the handoff. The normal case, used
+//     when you still hold your key and simply want a new one.
+//  2. `recovery`: signatures from keys the identity DESIGNATED in advance (see
+//     RecoveryPolicy), for when the old key is gone and cannot sign anything.
+//     This is what makes a lost key survivable without handing anyone else
+//     standing authority over the identity: the designation was itself signed by
+//     the user's own key, back when they still had it, so the authority is
+//     inherited from the root of trust rather than granted by us.
+//
+// What is deliberately NOT here: any path where a server, a login, or a domain
+// can authorize a key change. Recovery is still keys all the way down.
 export interface Rotation {
-  prevKeyId: string; // keyId of the key being rotated away from
-  prevKeySig: string; // compact JWS by the previous key over rotationStatement(...)
+  prevKeyId?: string; // keyId of the key being rotated away from (path 1)
+  prevKeySig?: string; // compact JWS by the previous key over rotationStatement(...)
+  recovery?: RecoverySignature[]; // signatures by designated recovery keys (path 2)
+}
+
+/** One designated recovery key's authorization of a specific key change. */
+export interface RecoverySignature {
+  keyId: string; // which designated key signed (must appear in the policy in force)
+  sig: string; // compact JWS by that key over recoveryStatement(...)
+}
+
+/** A key the identity has authorized, in advance, to recover it. */
+export interface RecoveryKey {
+  keyId: string;
+  publicKey: JWK; // embedded so a verifier can check a recovery offline
+  label?: string; // e.g. "printed recovery key", or a contact's handle
+}
+
+// Who may recover this identity if the signing key is lost, declared inside the
+// SIGNED manifest so it carries the user's own authority and is public.
+// `threshold` of the listed keys must sign. One printed key is {threshold: 1,
+// keys: [that key]}; recovery contacts are the same shape with a higher
+// threshold and other people's keys, which is why this is a policy and not a
+// single field.
+//
+// Honest consequence, and it must be surfaced in any UI: a designated key is as
+// powerful as the signing key. Whoever holds enough of them can take the
+// identity. Threshold is the only dial that makes that harder.
+export interface RecoveryPolicy {
+  threshold: number;
+  keys: RecoveryKey[];
 }
 
 // The exact bytes the PREVIOUS key signs to authorize a rotation to `newKeyId` at
 // a given chain position. Signer and verifier must agree on this string.
 export function rotationStatement(newKeyId: string, seq: number, prev: string | null): string {
   return `rh-rotate:v1:${newKeyId}:${seq}:${prev ?? ''}`;
+}
+
+// The bytes a designated RECOVERY key signs. Deliberately a different string
+// from rotationStatement: domain separation stops a signature collected for one
+// purpose being replayed as the other.
+export function recoveryStatement(newKeyId: string, seq: number, prev: string | null): string {
+  return `rh-recover:v1:${newKeyId}:${seq}:${prev ?? ''}`;
+}
+
+/** A policy is only meaningful if enough distinct keys exist to meet it. */
+export function isValidRecoveryPolicy(p: RecoveryPolicy | undefined): p is RecoveryPolicy {
+  if (!p || !Array.isArray(p.keys) || p.keys.length === 0) return false;
+  if (!Number.isInteger(p.threshold) || p.threshold < 1 || p.threshold > p.keys.length) return false;
+  const ids = new Set(p.keys.map((k) => k.keyId));
+  return ids.size === p.keys.length; // duplicates would inflate the count
+}
+
+/**
+ * Count how many DISTINCT designated keys validly authorized this key change.
+ * Exported so the server can enforce the same rule it publishes.
+ */
+export async function countRecoveryApprovals(
+  policy: RecoveryPolicy,
+  sigs: RecoverySignature[],
+  newKeyId: string,
+  seq: number,
+  prev: string | null
+): Promise<number> {
+  const statement = recoveryStatement(newKeyId, seq, prev);
+  const approved = new Set<string>();
+  for (const s of sigs ?? []) {
+    if (approved.has(s.keyId)) continue; // one key, one vote
+    const designated = policy.keys.find((k) => k.keyId === s.keyId);
+    if (!designated) continue; // not a key this identity ever authorized
+    try {
+      const key = await importJWK(designated.publicKey, SIGNING_ALG);
+      const { payload } = await compactVerify(s.sig, key);
+      if (new TextDecoder().decode(payload) !== statement) continue;
+      // The embedded public key must really be the keyId it claims, or a
+      // hostile entry could smuggle its own key in under a designated id.
+      if ((await keyIdFromJwk(designated.publicKey)) !== designated.keyId) continue;
+      approved.add(s.keyId);
+    } catch {
+      /* bad signature: does not count */
+    }
+  }
+  return approved.size;
 }
 
 export interface Manifest {
@@ -108,6 +198,10 @@ export interface Manifest {
   seq?: number; // 0-based, increments by 1 per re-sign
   prev?: string | null; // base64url(SHA-256(previous manifest JWS)), null at genesis
   rotation?: Rotation; // present only when this entry changes the signing key
+  // Who may recover this identity if the signing key is lost. Signed, so it is
+  // the user's own key that grants this authority, and public, so anyone
+  // verifying can see the recovery model an identity is running under.
+  recovery?: RecoveryPolicy;
 }
 
 // The file we serve / hand the user to host. `jws` is authoritative; the
@@ -248,6 +342,11 @@ export async function verifyChain(
 ): Promise<ChainResult> {
   let trustedKeyId: string | undefined; // the key the chain currently trusts
   let trustedPubKey: JWK | undefined; // its public JWK, to check a rotation signature
+  // The recovery policy in force, taken from the last entry we accepted. A
+  // recovery is judged against what the identity had ALREADY committed to before
+  // it happened, never against the policy the recovering entry declares for
+  // itself, which an attacker would otherwise just write in their own favour.
+  let trustedRecovery: RecoveryPolicy | undefined;
   let genesisKeyId: string | undefined;
   let prevHash: string | null = null;
   for (let i = 0; i < entries.length; i++) {
@@ -267,24 +366,41 @@ export async function verifyChain(
       genesisKeyId = entryKeyId;
       trustedPubKey = m.subject.publicKey;
     } else if (entryKeyId !== trustedKeyId) {
-      // The key changed: only allowed with a rotation the previous key authorized.
+      // The key changed. Allowed only if the previous key authorized it, or if
+      // enough keys the identity designated in advance did.
       const rot = m.rotation;
       if (!rot) return { valid: false, reason: `Entry ${i}: key changed without a rotation.`, length: entries.length };
-      if (rot.prevKeyId !== trustedKeyId) return { valid: false, reason: `Entry ${i}: rotation.prevKeyId is not the chain's current key.`, length: entries.length };
-      try {
-        const oldKey = await importJWK(trustedPubKey!, SIGNING_ALG);
-        const { payload } = await compactVerify(rot.prevKeySig, oldKey);
-        if (new TextDecoder().decode(payload) !== rotationStatement(entryKeyId, seq, prev)) {
-          return { valid: false, reason: `Entry ${i}: rotation attestation does not match this entry.`, length: entries.length };
+
+      if (rot.prevKeySig) {
+        if (rot.prevKeyId !== trustedKeyId) return { valid: false, reason: `Entry ${i}: rotation.prevKeyId is not the chain's current key.`, length: entries.length };
+        try {
+          const oldKey = await importJWK(trustedPubKey!, SIGNING_ALG);
+          const { payload } = await compactVerify(rot.prevKeySig, oldKey);
+          if (new TextDecoder().decode(payload) !== rotationStatement(entryKeyId, seq, prev)) {
+            return { valid: false, reason: `Entry ${i}: rotation attestation does not match this entry.`, length: entries.length };
+          }
+        } catch {
+          return { valid: false, reason: `Entry ${i}: rotation not signed by the previous key.`, length: entries.length };
         }
-      } catch {
-        return { valid: false, reason: `Entry ${i}: rotation not signed by the previous key.`, length: entries.length };
+      } else if (rot.recovery?.length) {
+        if (!isValidRecoveryPolicy(trustedRecovery)) {
+          return { valid: false, reason: `Entry ${i}: recovery attempted but the identity had designated no recovery keys.`, length: entries.length };
+        }
+        const approvals = await countRecoveryApprovals(trustedRecovery, rot.recovery, entryKeyId, seq, prev);
+        if (approvals < trustedRecovery.threshold) {
+          return { valid: false, reason: `Entry ${i}: recovery has ${approvals} valid approval(s), needs ${trustedRecovery.threshold}.`, length: entries.length };
+        }
+      } else {
+        return { valid: false, reason: `Entry ${i}: rotation carries no authorization.`, length: entries.length };
       }
+
       trustedKeyId = entryKeyId; // continuity: trust transfers to the new key
       trustedPubKey = m.subject.publicKey;
     } else {
       trustedPubKey = m.subject.publicKey;
     }
+    // The policy this entry declares governs whatever comes after it.
+    trustedRecovery = m.recovery;
     prevHash = await manifestJwsHash(entries[i].jws);
   }
   if (expectedKeyId && genesisKeyId !== expectedKeyId) {

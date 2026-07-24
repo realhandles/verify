@@ -57,6 +57,46 @@ const result = await verifySignedManifest(file, trustedKeyId);
 This is what makes a lapsed or hijacked domain harmless: verification follows
 the key, never the name.
 
+## Verify a whole history (`verifyChain`)
+
+An identity's manifests form an append-only chain: each entry carries `seq` and
+`prev` (the hash of the previous entry's JWS). Fetch the history from
+`https://realhandles.com/<handle>/realhandles-chain.json` and check all of it at
+once:
+
+```ts
+const { versions } = await fetch('https://realhandles.com/david/realhandles-chain.json').then((r) => r.json());
+const result = await verifyChain(versions.map((v) => v.file), pinnedGenesisKeyId);
+// result.keyId is the CURRENT key, proven from the one you originally pinned.
+```
+
+Pass the key you pinned the FIRST time you saw the identity. `verifyChain`
+confirms every entry is signed, that `seq` and `prev` link up, and that the
+signing key only ever changed in a way the identity itself authorized.
+
+### How a key is allowed to change
+
+Two ways, and one of them must hold or the chain is rejected:
+
+- **Rotation.** The entry carries `rotation.prevKeySig`, the OLD key's signature
+  over `rotationStatement(newKeyId, seq, prev)`. Used when the holder still has
+  their key. Someone who steals only the new key cannot forge this.
+- **Recovery.** The old key is gone, so it cannot sign anything. The entry
+  carries `rotation.recovery`, signatures over
+  `recoveryStatement(newKeyId, seq, prev)` from keys the identity DESIGNATED IN
+  ADVANCE via a `recovery` policy in an earlier signed manifest. The policy names
+  the permitted keys and how many must agree (`threshold`), so one printed
+  recovery key is `{ threshold: 1 }` and recovery contacts are the same shape with
+  a higher threshold.
+
+The policy that counts is the one published BEFORE the recovery, never the one
+the recovering entry declares about itself. Otherwise anyone could turn up
+asserting their own key had been authorized all along.
+
+Note what is absent from both paths: there is no way for a server, a login, or a
+domain to authorize a key change. Recovery is still keys all the way down, which
+is why this library can check it without asking realhandles.com anything.
+
 ## Derive a did:key
 
 Every RealHandles key is also a standard [`did:key`](https://w3c-ccg.github.io/did-method-key/):

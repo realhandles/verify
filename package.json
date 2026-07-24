@@ -1,6 +1,6 @@
 {
   "name": "@realhandles/verify",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Independently verify RealHandles signed identity proofs. Isomorphic and dependency-light (jose only), so the same verification runs in a browser, a serverless function, or anyone else's tooling.",
   "type": "module",
   "license": "MIT",
