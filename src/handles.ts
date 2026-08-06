@@ -33,7 +33,11 @@ type HandleShape = Pick<Proof, 'kind' | 'platform' | 'handle' | 'domain' | 'meta
 export function publishedHandle(p: HandleShape): string {
   if (p.kind === 'domain') return p.domain ?? '';
   const ens = typeof p.metadata?.ens === 'string' ? (p.metadata.ens as string) : undefined;
-  return ens ?? p.handle ?? '';
+  // Same idea as ENS: publish the name a person actually uses, while the key
+  // underneath stays the identity. A confirmed NIP-05 reads as
+  // "davidvkimball.com" where an npub is 63 characters nobody can check by eye.
+  const nip05 = typeof p.metadata?.nip05 === 'string' ? (p.metadata.nip05 as string) : undefined;
+  return nip05 ?? ens ?? p.handle ?? '';
 }
 
 // A stable key for comparing what a proof would publish, using publishedHandle so
@@ -73,10 +77,103 @@ export const RESERVED_WORDS = new Set([
   'team', 'security', 'abuse', 'legal', 'privacy', 'terms', 'status', 'docs', 'blog',
   // Current page slugs (a static page shadows a [username] match, so these must
   // never be claimable) plus a curated set reserved for likely future pages, so
-  // we can ship them without bumping anyone off their handle.
+  // we can ship them without bumping anyone off an already-claimed handle.
   'directory', 'spec', 'compare', 'report', 'settings', 'account', 'dashboard',
   'contact', 'pricing', 'faq', 'explore', 'search', 'discover', 'profile', 'me',
   'home', 'new', 'edit', 'onboarding', 'welcome',
+  // Impersonation and phishing bait. These are roles and prompts, not names: a
+  // handle like @walletrecovery or @realhandlessupport is only ever useful for
+  // convincing someone to hand over money or a key. No proof unlocks them,
+  // because no proof makes them safe to hand out. That is why they live here
+  // and not in PROTECTED_NAMES below.
+  '2fa', 'accounts', 'administrator', 'administrators', 'airdrop', 'airdrops', 'alert',
+  'alerts', 'amazonaws', 'auth', 'authentication', 'banking', 'billing', 'checkout',
+  'credentials', 'cryptosupport', 'customercare', 'customerservice', 'customersupport',
+  'do-not-reply', 'donotreply', 'emergency', 'emergencyservices', 'escrow', 'firedepartment',
+  'giveaway', 'giveaways', 'government', 'helpcenter', 'helpdesk', 'helpline', 'hostmaster',
+  'invoice', 'invoices', 'mailer-daemon', 'mfa', 'moderation', 'moderators', 'no-reply',
+  'noreply', 'notification', 'notifications', 'oauth', 'office365', 'otp', 'passcode',
+  'password', 'passwords', 'payment', 'payments', 'payout', 'payouts', 'policedepartment',
+  'postmaster', 'privatekey', 'publichealth', 'realhandleshelp', 'realhandlesofficial',
+  'realhandlessupport', 'realhandlesteam', 'recovery', 'recoveryphrase', 'refund', 'refunds',
+  'seedphrase', 'servicedesk', 'signin', 'signup', 'supportteam', 'sysadmin', 'techsupport',
+  'transaction', 'transactions', 'trustandsafety', 'verification', 'verified', 'wallet',
+  'walletrecovery', 'walletsupport', 'webmaster',
+]);
+
+// Names that are protected by WHAT THEY ARE, not by how long they are.
+//
+// The length rule protects scarcity: the shorter a handle, the stronger the
+// proof needed. It says nothing about a long name that is nonetheless famous.
+// "microsoft" is 9 characters and "cloudflare" is 10, so both fell into the
+// open tier and could be taken by anyone with a keyboard. This list closes that
+// hole by raising such a name to the Protected tier at any length.
+//
+// It is not a block list. Microsoft still gets @microsoft, by proving
+// @microsoft on a key platform or control of microsoft.com, through exactly the
+// same gate everyone else goes through. Nobody else gets it.
+//
+// Deliberately NOT here:
+// - Common first names. "jack" is 4 characters, so the length rule already
+//   makes it Protected and already demands a matching verified proof. A names
+//   list would add nothing and would punish people for being called Jack.
+// - Impersonation and phishing terms (support, billing, seedphrase). Those are
+//   in RESERVED_WORDS above, because no proof should unlock them.
+// - Handles we operate or route ourselves. Those are RESERVED_WORDS too.
+//
+// Entries are lowercase, deduplicated, sorted, and matched exactly: this gate
+// keys on the whole handle, so "microsoft" is covered and "microsoftfan" is not.
+export const PROTECTED_NAMES = new Set([
+  '1password', 'abercrombie', 'absolutvodka', 'accenture', 'activision', 'aeromexico',
+  'aircanada', 'airfrance', 'alaskaair', 'alfaromeo', 'aliexpress', 'aljazeera', 'americanair',
+  'americanairlines', 'americanexpress', 'anthropic', 'applebees', 'astonmartin', 'atlassian',
+  'automattic', 'balenciaga', 'bankofamerica', 'barclaycard', 'baskinrobbins', 'benandjerrys',
+  'bigcommerce', 'birkenstock', 'bitbucket', 'bitwarden', 'blackrock', 'bloomberg',
+  'bloomingdales', 'bnpparibas', 'bookingcom', 'bridgestone', 'britishairways', 'budweiser',
+  'burgerking', 'bytedance', 'calvinklein', 'capitalone', 'carlsberg', 'carrefour',
+  'cartoonnetwork', 'cathaypacific', 'charlesschwab', 'chasebank', 'chevrolet',
+  'chickfila', 'citigroup', 'clevelandclinic', 'cloudflare', 'coastguard', 'coingecko',
+  'coinmarketcap', 'creditkarma', 'crimestoppers', 'crowdstrike', 'crunchyroll',
+  'curvefinance', 'dartmouth', 'databricks', 'deliveroo', 'deutschebank', 'dickssportinggoods',
+  'digitalocean', 'discovercard', 'disneyplus', 'dolcegabbana', 'dollargeneral', 'doubletree',
+  'downingstreet', 'dreamworks', 'duckduckgo', 'dunkindonuts', 'eigenlayer', 'elasticsearch',
+  'electrolux', 'elevenlabs', 'epicgames', 'esteelauder', 'etherscan',
+  'etihadairways', 'europeancommission', 'europeanunion', 'expressvpn', 'familydollar',
+  'fcbarcelona', 'federalreserve', 'ferrerorocher', 'financialtimes', 'fisherprice',
+  'footlocker', 'forever21', 'fourseasons', 'generalmills', 'goldmansachs', 'googlecloud',
+  'greenpeace', 'haagendazs', 'harleydavidson', 'hashicorp', 'healthcanada', 'hellofresh',
+  'holidayinn', 'hollywoodreporter', 'homedepot', 'homelandsecurity', 'huggingface',
+  'indiegogo', 'instacart', 'instagram', 'interactivebrokers', 'intercontinental',
+  'internetarchive', 'jackdaniels', 'jetbrains', 'johnniewalker', 'johnshopkins',
+  'jpmorganchase', 'kaspersky', 'katespade', 'kickstarter', 'kitchenaid', 'kraftheinz',
+  'krispykreme', 'kubernetes', 'lamborghini', 'landrover', 'letsencrypt', 'letterboxd',
+  'lidofinance', 'linuxfoundation', 'lionsgate', 'listerine', 'livenation', 'liverpoolfc',
+  'lloydsbank', 'lonelyplanet', 'lorealparis', 'louisvuitton', 'lufthansa', 'lululemon',
+  'magiceden', 'mailchimp', 'manchesterunited', 'marksandspencer', 'mastercard', 'maybelline',
+  'mayoclinic', 'mcdonalds', 'mercadolibre', 'mercadopago', 'mercedesbenz', 'metatrader',
+  'michaelkors', 'microsoft', 'midjourney', 'minecraft', 'mistralai', 'mitsubishi', 'moneygram',
+  'morganstanley', 'namecheap', 'nationalgeographic', 'nationalguard', 'navyfederal',
+  'nespresso', 'neutrogena', 'newbalance', 'nhsengland', 'nickelodeon', 'nordstrom',
+  'notredame', 'olivegarden', 'panasonic', 'pancakeswap', 'panerabread', 'paramountplus',
+  'patekphilippe', 'pillsbury', 'pinterest', 'playmobil', 'playstation',
+  'polymarket', 'postalservice', 'postgresql', 'premierleague', 'priceline', 'primevideo',
+  'princeton', 'producthunt', 'protonmail', 'qatarairways', 'quickbooks', 'rackspace',
+  'ralphlauren', 'raspberrypi', 'realmadrid', 'redcrescent', 'riotgames', 'ritzcarlton',
+  'robinhood', 'rocketmortgage', 'rockstargames', 'rollingstone', 'rollsroyce',
+  'rottentomatoes', 'sainsburys', 'salesforce', 'salvationarmy', 'samsonite', 'sanpellegrino',
+  'santander', 'savethechildren', 'scotiabank', 'sendgrid', 'sentinelone', 'servicenow',
+  'sharepoint', 'signalapp', 'singaporeair', 'socialsecurity', 'soundcloud', 'sourceforge',
+  'southwestair', 'squarespace', 'stabilityai', 'stackexchange', 'stackoverflow',
+  'standardchartered', 'starbucks', 'statedepartment', 'stellaartois', 'sushiswap', 'swarovski',
+  'teamviewer', 'techcrunch', 'telemundo', 'terraform', 'theeconomist', 'theguardian',
+  'thenorthface', 'ticketmaster', 'tiffanyandco', 'timberland', 'toblerone', 'tommyhilfiger',
+  'traderjoes', 'tradingview', 'transunion', 'tripadvisor', 'tropicana', 'trustwallet',
+  'tupperware', 'turkishairlines', 'ukgovernment', 'underarmour', 'unitedairlines',
+  'unitednations', 'univision', 'urbanoutfitters', 'usembassy', 'usgovernment', 'vanityfair',
+  'victoriassecret', 'virginatlantic', 'visualstudio', 'volkswagen', 'walgreens',
+  'walletconnect', 'warnerbros', 'washingtonpost', 'wealthfront', 'wellsfargo', 'westernunion',
+  'westpoint', 'whitehouse', 'wholefoods', 'wikimedia', 'wikipedia', 'woocommerce',
+  'woolworths', 'wordpress', 'worldbank', 'ycombinator',
 ]);
 
 // Operator-curated aliases: a reserved handle that points to a canonical
@@ -170,6 +267,10 @@ export function domainTld(domain: string): string {
 export const VERIFIED_METHODS = new Set([
   'oauth', 'tweet-proof', 'post-proof', 'description-proof', 'atproto',
   'domain-control', 'domain-anchor', 'wallet-signature', 'rel-me',
+  // A Nostr account IS a keypair, so a signature over our challenge proves
+  // control directly. No platform is asked and no page is read, which puts it
+  // alongside the wallet and domain proofs rather than the bio-reading ones.
+  'nostr-signature',
 ]);
 
 /** True when a first party confirmed the account (vs. a claim / URL-control proof). */
@@ -270,10 +371,17 @@ export interface Tier {
   minScore: number;
   label: string;
   note: string;
+  // True when the tier came from the name being well known rather than short.
+  // Callers use it to explain the refusal honestly: "Open (9+ characters)" is a
+  // lie for @microsoft, and a person refused a handle deserves the real reason.
+  protectedName?: boolean;
 }
 
+// Strictness order, so two tiers can be compared and the stronger one wins.
+const TIER_RANK: Record<Tier['name'], number> = { open: 0, premium: 1, reserved: 2 };
+
 /** Length-based protection tier. Thresholds live here so they are easy to tune. */
-export function tierFor(username: string): Tier {
+function tierForLength(username: string): Tier {
   const len = normalizeHandle(username).length;
   if (len <= 2) {
     return {
@@ -297,6 +405,29 @@ export function tierFor(username: string): Tier {
     label: 'Open (9+ characters)',
     note: 'This handle is open to claim. A matching verified account or domain adds a namesake badge.',
   };
+}
+
+/**
+ * Protection tier for a handle, from its length AND its name.
+ *
+ * Length alone left a hole: "microsoft" is 9 characters, so the open tier handed
+ * it to whoever typed fastest. A name in PROTECTED_NAMES is Protected at any
+ * length, and the stronger of the two tiers wins, so a well-known two-letter
+ * name stays Reserved rather than dropping to Protected. The gate itself is
+ * unchanged: it is still the same proof match, just at a higher bar.
+ */
+export function tierFor(username: string): Tier {
+  const u = normalizeHandle(username);
+  const byLength = tierForLength(u);
+  if (!PROTECTED_NAMES.has(u)) return byLength;
+  const byName: Tier = {
+    name: 'premium',
+    minScore: 40,
+    label: 'Protected (well-known name)',
+    note: `@${u} is a widely recognized name, so it is protected whatever its length. Verify a matching account on a key platform, or prove you control ${u}.com, and it is yours.`,
+    protectedName: true,
+  };
+  return TIER_RANK[byLength.name] > TIER_RANK[byName.name] ? byLength : byName;
 }
 
 export interface ClaimEval {
@@ -331,20 +462,41 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
   if (reservedWord) message = 'That handle is reserved by the system and cannot be claimed.';
   else if (!isValidFormat(u)) message = 'Handles are 1-39 characters: letters, numbers, hyphen, underscore, starting with a letter or number.';
   else if (qualifies) {
-    message =
-      tier.name === 'open'
-        ? basis
-          ? `Open handle, and you have a namesake match via ${basis.detail}.`
-          : 'This handle is open to claim.'
-        : `You qualify for this ${tier.name} handle via ${basis!.detail}.`;
+    if (tier.name === 'open') {
+      message = basis
+        ? `Open handle, and you have a namesake match via ${basis.detail}.`
+        : 'This handle is open to claim.';
+    } else if (tier.protectedName) {
+      message = `@${u} is a protected name, and you qualify via ${basis!.detail}.`;
+    } else {
+      message = `You qualify for this ${tier.name} handle via ${basis!.detail}.`;
+    }
   } else {
-    message = `This is a ${tier.name} handle. ${tier.note}`;
+    // A name-protected tier already explains itself, including why this handle
+    // is gated and what unlocks it, so do not bury it behind "premium handle".
+    message = tier.protectedName ? tier.note : `This is a ${tier.name} handle. ${tier.note}`;
   }
 
+  // The advice has to name routes that actually clear THIS tier's minScore.
+  // It used to list GitHub for every tier, including the 1-2 character one where
+  // minScore is 60 and GitHub scores 40, so it told people to go and do
+  // something that could not work. Tier 2 platforms are named only when 40 is
+  // enough, and Bluesky was missing from the tier 1 list entirely.
   const howToQualify: string[] = [];
   if (!qualifies && !reservedWord && isValidFormat(u)) {
-    howToQualify.push(`Verify @${u} on a key platform (X, YouTube, TikTok, Instagram, LinkedIn, or GitHub).`);
-    howToQualify.push(`Prove you control ${u}.com (or another established TLD) via the domain challenge.`);
+    const tier1 = Object.entries(KEY_PLATFORMS)
+      .filter(([, meta]) => meta.tier === 1)
+      .map(([, meta]) => meta.label);
+    const tier2 = Object.entries(KEY_PLATFORMS)
+      .filter(([, meta]) => meta.tier === 2)
+      .map(([, meta]) => meta.label);
+    const usable = tier.minScore <= 40 ? [...tier1, ...tier2] : tier1;
+    howToQualify.push(`Verify @${u} on a key platform (${usable.join(', ')}).`);
+    howToQualify.push(
+      tier.minScore <= 40
+        ? `Prove you control ${u}.com (or another established TLD) via the domain challenge.`
+        : `Prove you control ${u}.com via the domain challenge. A cheaper TLD does not reach this tier.`,
+    );
   }
 
   return { username: u, valid, reservedWord, tier, score, basis, qualifies, message, howToQualify };
