@@ -317,20 +317,39 @@ export async function verifySignedManifest(
 }
 
 export interface ChainResult {
+  /** Every entry's signature verified, every link matched, every key change was authorized. */
   valid: boolean;
+  /**
+   * ...AND the history reaches back to the genesis (seq 0). A chain can be
+   * entirely valid yet incomplete, when the entries before its first one are not
+   * available. That is a real and separate state: nothing about it is forged, but
+   * it cannot prove descent from a key you pinned at the genesis, so it never
+   * satisfies `expectedKeyId`. Do not treat `valid` alone as full trust.
+   */
+  complete: boolean;
   reason?: string;
   keyId?: string;
   length: number;
+  /** Chain position of the first entry supplied. 0 for a complete history. */
+  startsAt?: number;
 }
 
 /**
  * Verify an identity's manifest history is a well-formed append-only chain.
  * Entries must be ordered oldest-first (as served at
  * /<handle>/realhandles-chain.json). Checks that every entry verifies, `seq`
- * starts at 0 and increments by 1, and each `prev` equals the hash of the
- * previous entry's JWS. The signing key must stay the same UNLESS an entry
- * carries a valid `rotation`: then the change is accepted because the previous
- * key signed a statement authorizing the new one (continuity follows the key).
+ * increments by 1, and each `prev` equals the hash of the previous entry's JWS.
+ * The signing key must stay the same UNLESS an entry carries a valid `rotation`:
+ * then the change is accepted because the previous key signed a statement
+ * authorizing the new one (continuity follows the key).
+ *
+ * TWO separate answers come back, and callers must read both. `valid` says the
+ * entries supplied are sound. `complete` says they also reach back to the genesis
+ * at seq 0. A history whose earliest entries are simply gone is `valid` but not
+ * `complete`: every signature in it is genuine, which is a different thing from a
+ * forgery and must not be reported as one. Only a complete chain can be checked
+ * against a pinned genesis key, so `expectedKeyId` always fails on an incomplete
+ * one and no trust decision is loosened by the distinction.
  *
  * `keyId` in the result is the CURRENT key (after any rotations). If
  * `expectedKeyId` is given, it must equal the GENESIS key: you pin a key the
@@ -349,16 +368,35 @@ export async function verifyChain(
   let trustedRecovery: RecoveryPolicy | undefined;
   let genesisKeyId: string | undefined;
   let prevHash: string | null = null;
+  // Where this history begins. Normally 0. Higher means earlier entries were not
+  // supplied, so the chain is judged from its own first entry onward and reported
+  // as incomplete rather than as broken.
+  let startsAt = 0;
   for (let i = 0; i < entries.length; i++) {
     const res = await verifySignedManifest(entries[i]);
     if (!res.valid || !res.manifest) {
-      return { valid: false, reason: `Entry ${i}: ${res.reason ?? 'signature did not verify'}`, length: entries.length };
+      return { valid: false, complete: false, reason: `Entry ${i}: ${res.reason ?? 'signature did not verify'}`, length: entries.length };
     }
     const m = res.manifest;
     const seq = m.seq ?? 0;
-    if (seq !== i) return { valid: false, reason: `Entry ${i}: seq is ${seq}, expected ${i}.`, length: entries.length };
     const prev = m.prev ?? null;
-    if (prev !== prevHash) return { valid: false, reason: `Entry ${i}: prev does not match the previous entry.`, length: entries.length };
+    if (i === 0) {
+      if (seq < 0) return { valid: false, complete: false, reason: 'Entry 0: seq is negative.', length: entries.length };
+      startsAt = seq;
+      // A genesis, and only a genesis, has nothing before it. Where the history
+      // is truncated, entry 0's prev points at an entry we were not given, so
+      // there is nothing to check it against and we must not pretend otherwise.
+      if (startsAt === 0 && prev !== null) {
+        return { valid: false, complete: false, reason: 'Entry 0: a genesis entry must have no prev.', length: entries.length };
+      }
+    } else {
+      if (seq !== startsAt + i) {
+        return { valid: false, complete: false, startsAt, reason: `Entry ${i}: seq is ${seq}, expected ${startsAt + i}.`, length: entries.length };
+      }
+      if (prev !== prevHash) {
+        return { valid: false, complete: false, startsAt, reason: `Entry ${i}: prev does not match the previous entry.`, length: entries.length };
+      }
+    }
 
     const entryKeyId = res.keyId!;
     if (trustedKeyId === undefined) {
@@ -369,29 +407,29 @@ export async function verifyChain(
       // The key changed. Allowed only if the previous key authorized it, or if
       // enough keys the identity designated in advance did.
       const rot = m.rotation;
-      if (!rot) return { valid: false, reason: `Entry ${i}: key changed without a rotation.`, length: entries.length };
+      if (!rot) return { valid: false, complete: false, startsAt, reason: `Entry ${i}: key changed without a rotation.`, length: entries.length };
 
       if (rot.prevKeySig) {
-        if (rot.prevKeyId !== trustedKeyId) return { valid: false, reason: `Entry ${i}: rotation.prevKeyId is not the chain's current key.`, length: entries.length };
+        if (rot.prevKeyId !== trustedKeyId) return { valid: false, complete: false, startsAt, reason: `Entry ${i}: rotation.prevKeyId is not the chain's current key.`, length: entries.length };
         try {
           const oldKey = await importJWK(trustedPubKey!, SIGNING_ALG);
           const { payload } = await compactVerify(rot.prevKeySig, oldKey);
           if (new TextDecoder().decode(payload) !== rotationStatement(entryKeyId, seq, prev)) {
-            return { valid: false, reason: `Entry ${i}: rotation attestation does not match this entry.`, length: entries.length };
+            return { valid: false, complete: false, startsAt, reason: `Entry ${i}: rotation attestation does not match this entry.`, length: entries.length };
           }
         } catch {
-          return { valid: false, reason: `Entry ${i}: rotation not signed by the previous key.`, length: entries.length };
+          return { valid: false, complete: false, startsAt, reason: `Entry ${i}: rotation not signed by the previous key.`, length: entries.length };
         }
       } else if (rot.recovery?.length) {
         if (!isValidRecoveryPolicy(trustedRecovery)) {
-          return { valid: false, reason: `Entry ${i}: recovery attempted but the identity had designated no recovery keys.`, length: entries.length };
+          return { valid: false, complete: false, startsAt, reason: `Entry ${i}: recovery attempted but the identity had designated no recovery keys.`, length: entries.length };
         }
         const approvals = await countRecoveryApprovals(trustedRecovery, rot.recovery, entryKeyId, seq, prev);
         if (approvals < trustedRecovery.threshold) {
-          return { valid: false, reason: `Entry ${i}: recovery has ${approvals} valid approval(s), needs ${trustedRecovery.threshold}.`, length: entries.length };
+          return { valid: false, complete: false, startsAt, reason: `Entry ${i}: recovery has ${approvals} valid approval(s), needs ${trustedRecovery.threshold}.`, length: entries.length };
         }
       } else {
-        return { valid: false, reason: `Entry ${i}: rotation carries no authorization.`, length: entries.length };
+        return { valid: false, complete: false, startsAt, reason: `Entry ${i}: rotation carries no authorization.`, length: entries.length };
       }
 
       trustedKeyId = entryKeyId; // continuity: trust transfers to the new key
@@ -403,10 +441,27 @@ export async function verifyChain(
     trustedRecovery = m.recovery;
     prevHash = await manifestJwsHash(entries[i].jws);
   }
-  if (expectedKeyId && genesisKeyId !== expectedKeyId) {
-    return { valid: false, reason: 'Chain does not start with the expected (pinned) key.', length: entries.length };
+  const complete = startsAt === 0;
+  // A pinned key is a claim about the GENESIS, so an incomplete history can never
+  // satisfy one: the entries that would connect this chain to the key you pinned
+  // are exactly the ones missing. This is the security property that makes the
+  // valid/complete split safe, so it must stay strict.
+  if (expectedKeyId) {
+    if (!complete) {
+      return { valid: false, complete, startsAt, keyId: trustedKeyId, length: entries.length, reason: `This history starts at chain position ${startsAt}, so it cannot be checked against the key you pinned at the genesis.` };
+    }
+    if (genesisKeyId !== expectedKeyId) {
+      return { valid: false, complete, startsAt, length: entries.length, reason: 'Chain does not start with the expected (pinned) key.' };
+    }
   }
-  return { valid: true, keyId: trustedKeyId, length: entries.length };
+  return {
+    valid: true,
+    complete,
+    startsAt,
+    keyId: trustedKeyId,
+    length: entries.length,
+    ...(complete ? {} : { reason: `Every entry verified, but this history starts at chain position ${startsAt} rather than 0, so it cannot be traced back to the genesis.` }),
+  };
 }
 
 /** Verify a signed pointer file (used for the "upload once" anchor). */

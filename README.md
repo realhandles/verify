@@ -74,13 +74,41 @@ Pass the key you pinned the FIRST time you saw the identity. `verifyChain`
 confirms every entry is signed, that `seq` and `prev` link up, and that the
 signing key only ever changed in a way the identity itself authorized.
 
+### Two answers, not one (`valid` and `complete`)
+
+Since 0.7.0 the result reports these separately, because they are different
+questions:
+
+| | meaning |
+|---|---|
+| `valid: true, complete: true` | Sound, and reaches back to the genesis at `seq 0`. |
+| `valid: true, complete: false` | Every signature and link is genuine, but the earliest entries were not supplied, so the history cannot be traced to its start. `startsAt` says where it does begin. |
+| `valid: false` | Something is actually wrong: a bad signature, a broken link, or an unauthorized key change. |
+
+An incomplete history is not a forgery, and reporting it as one is misleading. It
+is a history with a hole in it, which happens when early versions are lost.
+
+**If you gate on trust, check both.** `valid` alone now accepts a truncated
+chain:
+
+```ts
+if (result.valid && result.complete) {
+  // safe to treat as a fully proven history
+}
+```
+
+Passing `expectedGenesisKeyId` does this for you: a pinned key is a claim about
+the genesis, and the entries connecting a truncated chain to it are exactly the
+missing ones, so an incomplete chain can never satisfy the pin. That check is
+unchanged and remains strict.
+
 ### How a key is allowed to change
 
 Two ways, and one of them must hold or the chain is rejected:
 
 - **Rotation.** The entry carries `rotation.prevKeySig`, the OLD key's signature
   over `rotationStatement(newKeyId, seq, prev)`. Used when the holder still has
-  their key. Someone who steals only the new key cannot forge this.
+  the old key. Someone who steals only the new key cannot forge this.
 - **Recovery.** The old key is gone, so it cannot sign anything. The entry
   carries `rotation.recovery`, signatures over
   `recoveryStatement(newKeyId, seq, prev)` from keys the identity DESIGNATED IN

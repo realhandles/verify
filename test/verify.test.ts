@@ -142,3 +142,59 @@ describe('verifyChain: recovery', () => {
     expect((await verifyChain([gen, forged])).valid).toBe(false);
   });
 });
+
+// A history whose earliest entries are lost is not a forgery. Conflating the two
+// once made this package call a genuine identity untrustworthy, so `valid` and
+// `complete` are now separate answers. The pin must stay strict regardless.
+describe('verifyChain: incomplete history', () => {
+  // One key, many entries, so the chain is real rather than a set of unrelated
+  // manifests. Returns the whole chain; slicing it models the lost genesis.
+  async function chainOf(n: number) {
+    const { publicKey, privateKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519', extractable: true });
+    const publicJwk = await exportJWK(publicKey);
+    const keyId = await keyIdFromJwk(publicJwk);
+    const entries: { jws: string }[] = [];
+    let prev: string | null = null;
+    for (let seq = 0; seq < n; seq++) {
+      const manifest: Manifest = {
+        version: MANIFEST_VERSION,
+        subject: { username: 'dvk', displayName: 'David', publicKey: publicJwk, keyId },
+        accounts: [],
+        issued: '2026-01-01T00:00:00.000Z',
+        statement: 'These accounts belong to the holder of this key.',
+        seq,
+        prev,
+      };
+      const jws = await new CompactSign(new TextEncoder().encode(JSON.stringify(manifest)))
+        .setProtectedHeader({ alg: SIGNING_ALG, kid: keyId })
+        .sign(privateKey);
+      entries.push({ jws });
+      prev = await manifestJwsHash(jws);
+    }
+    return { entries, keyId };
+  }
+
+  it('marks a whole history complete', async () => {
+    const { entries } = await chainOf(3);
+    const r = await verifyChain(entries);
+    expect(r.valid).toBe(true);
+    expect(r.complete).toBe(true);
+    expect(r.startsAt).toBe(0);
+  });
+
+  it('accepts a truncated history as valid but incomplete', async () => {
+    const { entries } = await chainOf(3);
+    const r = await verifyChain(entries.slice(1));
+    expect(r.valid).toBe(true);
+    expect(r.complete).toBe(false);
+    expect(r.startsAt).toBe(1);
+    expect(r.length).toBe(2);
+  });
+
+  // The property that makes the split safe to ship.
+  it('refuses to satisfy a pinned genesis key from a truncated history', async () => {
+    const { entries, keyId } = await chainOf(3);
+    expect((await verifyChain(entries, keyId)).valid).toBe(true);        // whole: fine
+    expect((await verifyChain(entries.slice(1), keyId)).valid).toBe(false); // truncated: never
+  });
+});
