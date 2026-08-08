@@ -81,6 +81,30 @@ export const RESERVED_WORDS = new Set([
   'directory', 'spec', 'compare', 'report', 'settings', 'account', 'dashboard',
   'contact', 'pricing', 'faq', 'explore', 'search', 'discover', 'profile', 'me',
   'home', 'new', 'edit', 'onboarding', 'welcome',
+  // Privileged-sounding roles. A handle only has to LOOK like staff to work as
+  // bait, so these are refused outright rather than gated behind a proof: no
+  // proof makes @sudo or @operator safe to hand to a stranger.
+  'su', 'sudo', 'system', 'operator', 'owner', 'internal',
+  // Placeholder values that a bug can produce as if they were a real name.
+  // Someone reaching @null because a field was empty must not find a person
+  // there, and "undefined" as a claimable handle is an invitation to farm
+  // whatever misroutes into it.
+  'null', 'undefined', 'none', 'true', 'false', 'nobody', 'anonymous', 'anon',
+  'guest', 'user', 'users',
+  // Scaffolding names. Cheap to reserve, and awkward to reclaim later from
+  // somebody who got there first.
+  'test', 'demo', 'example', 'sample', 'dev', 'staging', 'prod', 'production',
+  'alpha', 'beta', 'debug', 'console', 'config', 'script',
+  // More likely future pages, reserved now so shipping one never bumps anyone
+  // off a handle they already hold.
+  'about-us', 'careers', 'jobs', 'press', 'media', 'brand', 'trust', 'safety',
+  'changelog', 'roadmap', 'download', 'downloads', 'install', 'signup', 'signin',
+  'register', 'invite', 'invites', 'extension', 'notifications', 'messages',
+  'inbox', 'feed', 'trending', 'popular', 'top', 'all', 'public',
+  // Protocol nouns. A handle named after the mechanism reads as the mechanism
+  // speaking, which is exactly the confusion a phisher wants.
+  'vouch', 'vouches', 'key', 'keys', 'rotate', 'rotation', 'recovery', 'recover',
+  'claim', 'claims', 'anchor', 'manifest', 'proof', 'proofs',
   // Impersonation and phishing bait. These are roles and prompts, not names: a
   // handle like @walletrecovery or @realhandlessupport is only ever useful for
   // convincing someone to hand over money or a key. No proof unlocks them,
@@ -92,13 +116,14 @@ export const RESERVED_WORDS = new Set([
   'do-not-reply', 'donotreply', 'emergency', 'emergencyservices', 'escrow', 'firedepartment',
   'giveaway', 'giveaways', 'government', 'helpcenter', 'helpdesk', 'helpline', 'hostmaster',
   'invoice', 'invoices', 'mailer-daemon', 'mfa', 'moderation', 'moderators', 'no-reply',
-  'noreply', 'notification', 'notifications', 'oauth', 'office365', 'otp', 'passcode',
+  'noreply', 'notification', 'oauth', 'office365', 'otp', 'passcode',
   'password', 'passwords', 'payment', 'payments', 'payout', 'payouts', 'policedepartment',
   'postmaster', 'privatekey', 'publichealth', 'realhandleshelp', 'realhandlesofficial',
-  'realhandlessupport', 'realhandlesteam', 'recovery', 'recoveryphrase', 'refund', 'refunds',
-  'seedphrase', 'servicedesk', 'signin', 'signup', 'supportteam', 'sysadmin', 'techsupport',
+  'realhandlessupport', 'realhandlesteam', 'recoveryphrase', 'refund', 'refunds',
+  'seedphrase', 'servicedesk', 'supportteam', 'sysadmin', 'techsupport',
   'transaction', 'transactions', 'trustandsafety', 'verification', 'verified', 'wallet',
   'walletrecovery', 'walletsupport', 'webmaster',
+
 ]);
 
 // Names that are protected by WHAT THEY ARE, not by how long they are.
