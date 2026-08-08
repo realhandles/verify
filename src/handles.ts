@@ -105,6 +105,20 @@ export const RESERVED_WORDS = new Set([
   // speaking, which is exactly the confusion a phisher wants.
   'vouch', 'vouches', 'key', 'keys', 'rotate', 'rotation', 'recovery', 'recover',
   'claim', 'claims', 'anchor', 'manifest', 'proof', 'proofs',
+  // The word for the thing this site hands out. "@handle says your handle is
+  // suspended" reads as the system, not as a person, and that is the entire
+  // trick. Same reason 'realhandles' is here: the product's own nouns must not
+  // be wearable. 'username' is the same word in the other register, reserved so
+  // the obvious substitution does not walk straight through.
+  'handle', 'handles', 'realhandle', 'username', 'usernames', 'name', 'names',
+  'identity', 'identities',
+  // The rest of the mechanism, which the list above had started on and left
+  // half done. Each of these already names something the product does, so a
+  // person holding one is a person who can be mistaken for the thing itself.
+  'did', 'dids', 'didkey', 'chain', 'sigchain', 'disavow', 'disavowal',
+  'disavowals', 'sign', 'signed', 'signature', 'signatures', 'attest',
+  'attestation', 'attestations', 'timestamp', 'timestamps', 'pin', 'pins',
+  'pinned', 'badge', 'badges', 'trusted',
   // Impersonation and phishing bait. These are roles and prompts, not names: a
   // handle like @walletrecovery or @realhandlessupport is only ever useful for
   // convincing someone to hand over money or a key. No proof unlocks them,
@@ -217,6 +231,134 @@ export function aliasTarget(username: string): string | null {
   return Object.hasOwn(HANDLE_ALIASES, u) ? HANDLE_ALIASES[u] : null;
 }
 
+// --- reserved handles that a specific, provable claim can unlock -------------
+//
+// RESERVED_WORDS is a hard block, and for almost everything in it that is the
+// right answer: no proof makes @admin or @seedphrase safe to hand to a stranger,
+// because the danger is what the name SAYS, not who holds it.
+//
+// A few entries are different. @realhandles is dangerous in exactly one
+// direction, which is somebody who is not us holding it. There is a party for
+// whom it is not dangerous at all, and they can prove who they are. For that
+// case a flat refusal is the wrong shape twice over: it tells a legitimate
+// claimant nothing about whether they can ever have the name, and it makes the
+// answer an email to the operator rather than a rule anybody can read.
+//
+// **How this differs from PROTECTED_NAMES, which is a mechanism that already
+// exists.** PROTECTED_NAMES raises a name's TIER, so @microsoft is scored
+// through the ordinary gate at a higher bar and any single matching key-platform
+// handle or matching .com clears it. It is a difficulty setting on a gate
+// everybody walks through. This is not that. An unlock names the SPECIFIC proofs
+// for one specific handle, requires ALL of them, and the handle stays refused to
+// everyone else no matter how strong an unrelated proof they hold. Put a brand
+// in PROTECTED_NAMES when the ordinary rules should apply more strictly; put one
+// here only when a name is otherwise unclaimable and exactly one party should be
+// able to open it.
+//
+// Reserved-ness stays the DEFAULT. An entry in RESERVED_WORDS is unlockable only
+// if it is also named here.
+
+export type ReservedRequirement =
+  | { kind: 'domain'; domain: string }
+  | { kind: 'platform'; platform: string; handle: string };
+
+/** A reserved handle that a specific, provable claim can unlock. */
+export interface ReservedUnlock {
+  handle: string;
+  /**
+   * ALL of these must be satisfied. Deliberately AND, not OR.
+   *
+   * These are the most impersonation-sensitive names in the system, so the bar
+   * is higher than for an ordinary short handle, where one matching proof is
+   * enough. Two independent proofs also means losing one of them (a lapsed
+   * domain, a transferred org) does not by itself hand the name to whoever
+   * picked it up.
+   */
+  requires: ReservedRequirement[];
+  why: string;
+}
+
+export const RESERVED_UNLOCKS: ReservedUnlock[] = [
+  {
+    handle: 'realhandles',
+    requires: [
+      { kind: 'domain', domain: 'realhandles.com' },
+      { kind: 'platform', platform: 'github', handle: 'realhandles' },
+    ],
+    why: 'This is the name of the service itself, so it is the single most useful handle an impersonator could hold.',
+  },
+];
+
+/** The unlock rule for a handle, or null when nothing can open it. */
+export function reservedUnlockFor(username: string): ReservedUnlock | null {
+  const u = normalizeHandle(username);
+  return RESERVED_UNLOCKS.find((r) => r.handle === u) ?? null;
+}
+
+/** Does this proof satisfy this requirement? Verified proofs only, exact match only. */
+function satisfies(req: ReservedRequirement, p: Proof): boolean {
+  // The same bar the scarce-name gate uses. A claimed account must never open a
+  // reserved handle, and neither may a rel="me" link, which is only URL control
+  // and is the cheapest thing on this list for an impersonator to arrange.
+  if (!isNameGatingMethod(p.method)) return false;
+  if (req.kind === 'domain') {
+    return p.kind === 'domain' && !!p.domain && cleanDomain(p.domain) === cleanDomain(req.domain);
+  }
+  return (
+    p.kind === 'platform' &&
+    !!p.platform &&
+    !!p.handle &&
+    p.platform.toLowerCase() === req.platform.toLowerCase() &&
+    normalizeHandle(p.handle) === normalizeHandle(req.handle)
+  );
+}
+
+/** How a requirement reads to a person who has to go and satisfy it. */
+export function describeRequirement(req: ReservedRequirement): string {
+  return req.kind === 'domain'
+    ? `control of ${cleanDomain(req.domain)}`
+    : `@${normalizeHandle(req.handle)} on ${platformLabel(req.platform)}`;
+}
+
+export interface UnlockStatus {
+  unlock: ReservedUnlock;
+  met: ReservedRequirement[];
+  missing: ReservedRequirement[];
+  unlocked: boolean;
+}
+
+/**
+ * Which of a reserved handle's requirements these proofs already satisfy.
+ *
+ * Returns the breakdown rather than a boolean so the refusal can say which ones
+ * are done and which are left. A gate that refuses without saying why is
+ * indistinguishable from a bug, and the person on the other side of this one is
+ * by definition somebody who probably can satisfy it.
+ */
+export function unlockStatus(unlock: ReservedUnlock, proofs: Proof[]): UnlockStatus {
+  const met: ReservedRequirement[] = [];
+  const missing: ReservedRequirement[] = [];
+  for (const req of unlock.requires) {
+    if (proofs.some((p) => satisfies(req, p))) met.push(req);
+    else missing.push(req);
+  }
+  return { unlock, met, missing, unlocked: missing.length === 0 };
+}
+
+/**
+ * True when NOTHING can claim this handle, including a perfect proof set.
+ *
+ * The public answer to "is this reserved", used wherever a caller has no proofs
+ * to evaluate. Exported so the API route and evaluateClaim cannot disagree about
+ * it, which they previously could: the route checked RESERVED_WORDS alone and
+ * missed aliases.
+ */
+export function isHardReserved(username: string): boolean {
+  const u = normalizeHandle(username);
+  if (Object.hasOwn(HANDLE_ALIASES, u)) return true;
+  return RESERVED_WORDS.has(u) && !reservedUnlockFor(u);
+}
+
 export function normalizeHandle(s: string): string {
   // Strip a leading @ (and any spaces) so users can type "@name" or "name".
   return s.trim().replace(/^@+/, '').toLowerCase();
@@ -303,13 +445,30 @@ export function isVerifiedMethod(method: string): boolean {
   return VERIFIED_METHODS.has(method);
 }
 
+/**
+ * May this method decide who gets a NAME, as opposed to what shows on a profile?
+ *
+ * Stricter than isVerifiedMethod on purpose, and by exactly one method. rel="me"
+ * is Verified for display and for the trust score, because a mutual link really
+ * does prove control of that page. It is still only URL control, and a namesake
+ * page is cheap to mint, so it must never be what wins a scarce or reserved
+ * name from somebody.
+ *
+ * Shared by proofStrength and the reserved-handle unlock below so the two cannot
+ * drift apart. They had no reason to disagree, and a gate that quietly relaxed
+ * on one path and not the other is the kind of difference nobody notices until
+ * it is being exploited.
+ */
+export function isNameGatingMethod(method: string): boolean {
+  return isVerifiedMethod(method) && method !== 'rel-me';
+}
+
 /** Strength of one proof for a given desired username. 0 means it does not match. */
 export function proofStrength(username: string, p: Proof): number {
   // Only first-party-verified proofs gate a protected handle. Claims and
-  // URL-control proofs never do. rel="me" is Verified for display and the trust
-  // score, but a URL-control proof is too easy to mint a namesake on, so it
-  // never reserves a scarce handle (even on a key platform).
-  if (!isVerifiedMethod(p.method) || p.method === 'rel-me') return 0;
+  // URL-control proofs never do. See isNameGatingMethod for why rel="me" is
+  // Verified everywhere else and still excluded here.
+  if (!isNameGatingMethod(p.method)) return 0;
   const u = normalizeHandle(username);
   if (p.kind === 'domain' && p.domain) {
     if (domainLabel(p.domain) !== u) return 0;
@@ -465,6 +624,12 @@ export interface ClaimEval {
   qualifies: boolean;
   message: string;
   howToQualify: string[];
+  /**
+   * Set only for a reserved handle that a named proof set can open, so a caller
+   * can show progress rather than a wall. Absent for every ordinary handle and
+   * for the ones nothing unlocks.
+   */
+  unlock?: UnlockStatus;
 }
 
 export function isValidFormat(username: string): boolean {
@@ -477,14 +642,36 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
   const tier = tierFor(u);
   const basis = bestClaim(u, proofs);
   const score = basis?.score ?? 0;
-  // Alias handles are reserved too: they already point to a canonical identity,
-  // so no one else can claim them.
-  const reservedWord = RESERVED_WORDS.has(u) || Object.hasOwn(HANDLE_ALIASES, u);
+  // A reserved handle that names the proofs which open it is evaluated against
+  // THESE proofs. Everything else in RESERVED_WORDS, and every alias, stays a
+  // flat refusal: an alias already points at a canonical identity, and the rest
+  // are dangerous because of what the name says rather than who holds it.
+  const unlockRule = RESERVED_WORDS.has(u) ? reservedUnlockFor(u) : null;
+  const unlock = unlockRule ? unlockStatus(unlockRule, proofs) : undefined;
+  const reservedWord = isHardReserved(u) || (!!unlock && !unlock.unlocked);
   const valid = isValidFormat(u) && !reservedWord && u.length >= 1;
-  const qualifies = valid && score >= tier.minScore;
+  // An unlock IS the gate for its handle. The tier gate exists for names that
+  // are scarce by length or fame, and an unlock is strictly more specific and
+  // strictly stronger, so clearing it is not then second-guessed by a score.
+  const qualifies = valid && (unlock?.unlocked === true || score >= tier.minScore);
 
   let message: string;
-  if (reservedWord) message = 'That handle is reserved by the system and cannot be claimed.';
+  if (unlock && !unlock.unlocked) {
+    // The refusal a person can act on. Naming what is still needed, and what is
+    // already done, is the whole difference between a rule and an email to the
+    // operator.
+    const needed = unlock.unlock.requires.map(describeRequirement).join(' AND ');
+    // Only credit progress once there is some. With nothing met, "still needed"
+    // would just repeat the full list back, which reads like the gate is longer
+    // than it is.
+    const progress = unlock.met.length
+      ? ` You have ${unlock.met.length} of ${unlock.unlock.requires.length}: ${unlock.met.map(describeRequirement).join(', ')}.` +
+        ` Still needed: ${unlock.missing.map(describeRequirement).join(', ')}.`
+      : '';
+    message = `@${u} is reserved. ${unlock.unlock.why} It opens for exactly one claim: ${needed}.${progress}`;
+  } else if (unlock?.unlocked) {
+    message = `@${u} is reserved, and you have proved every claim it opens for: ${unlock.met.map(describeRequirement).join(' and ')}.`;
+  } else if (reservedWord) message = 'That handle is reserved by the system and cannot be claimed.';
   else if (!isValidFormat(u)) message = 'Handles are 1-39 characters: letters, numbers, hyphen, underscore, starting with a letter or number.';
   else if (qualifies) {
     if (tier.name === 'open') {
@@ -508,7 +695,18 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
   // something that could not work. Tier 2 platforms are named only when 40 is
   // enough, and Bluesky was missing from the tier 1 list entirely.
   const howToQualify: string[] = [];
-  if (!qualifies && !reservedWord && isValidFormat(u)) {
+  // An unlockable handle has its OWN steps, and they are the only ones that
+  // work. Falling through to the generic advice below would tell somebody to go
+  // and verify a key-platform account, which does nothing for a reserved name.
+  if (unlock && !unlock.unlocked) {
+    for (const req of unlock.missing) {
+      howToQualify.push(
+        req.kind === 'domain'
+          ? `Prove ${describeRequirement(req)} via the domain challenge.`
+          : `Verify ${describeRequirement(req)}.`,
+      );
+    }
+  } else if (!qualifies && !reservedWord && isValidFormat(u)) {
     const tier1 = Object.entries(KEY_PLATFORMS)
       .filter(([, meta]) => meta.tier === 1)
       .map(([, meta]) => meta.label);
@@ -524,5 +722,5 @@ export function evaluateClaim(username: string, proofs: Proof[]): ClaimEval {
     );
   }
 
-  return { username: u, valid, reservedWord, tier, score, basis, qualifies, message, howToQualify };
+  return { username: u, valid, reservedWord, tier, score, basis, qualifies, message, howToQualify, unlock };
 }
