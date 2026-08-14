@@ -14,6 +14,11 @@
 
 import { compactVerify, importJWK, type JWK } from 'jose';
 
+// Re-exported so callers that already depend on this module for manifest types
+// do not have to reach into jose separately for the one type those types are
+// built out of.
+export type { JWK };
+
 export const MANIFEST_VERSION = '1';
 export const SIGNING_ALG = 'EdDSA'; // Ed25519
 
@@ -50,6 +55,130 @@ export interface Disavowal {
   handle?: string; // the impersonating handle (account kind)
   url?: string; // link to the impersonating profile (account kind)
   note?: string; // e.g. "known impersonator", "same name, different person"
+}
+
+// The catch-all counterpart to a Disavowal, and a different KIND of claim.
+//
+// A Disavowal is OPEN-world: "that one account is not me", saying nothing about
+// accounts nobody has named. This is CLOSED-world: "the list you are looking at
+// is the whole list". That is the assertion that actually defeats impersonation
+// at scale, because disavowing impersonators one at a time loses to whoever can
+// register accounts faster, while declaring the list complete makes an unlisted
+// account suspect by default rather than merely unverified.
+//
+// It is also far easier to be wrong about. A forgotten old account, or one
+// opened tomorrow, makes an unqualified "anything not listed is not me" false
+// the moment it is signed. So this is a COMPLETENESS claim carrying its own
+// date, never an absolute denial: it says the list was whole as of `asserted`,
+// which stays true afterwards and lets a reader judge how fresh it is.
+//
+// `asserted` is the date the owner last AFFIRMED the list was whole, not the
+// date of the last publish. Carry it forward verbatim on an ordinary re-sign
+// instead of restamping it: restamping would refresh the date on every unrelated
+// edit and make staleness invisible again, which is the one failure this shape
+// exists to prevent.
+export interface ListCompleteness {
+  complete: boolean; // true: `accounts` is declared exhaustive as of `asserted`
+  asserted: string; // ISO 8601, when the owner last affirmed it
+  note?: string; // optional qualifier from the owner, e.g. "public accounts only"
+}
+
+/**
+ * A completeness claim is only publishable if it is dated. An undated one reads
+ * as an unqualified denial ("anything not listed is not me"), which is the exact
+ * claim this field exists to avoid, so a missing or unparseable `asserted` makes
+ * it invalid rather than merely untidy. Exported so the server enforces the same
+ * rule the profile page renders.
+ */
+export function isValidCompleteness(c: ListCompleteness | undefined): c is ListCompleteness {
+  if (!c || typeof c !== 'object') return false;
+  if (typeof c.complete !== 'boolean') return false;
+  if (typeof c.asserted !== 'string' || Number.isNaN(Date.parse(c.asserted))) return false;
+  if (c.note !== undefined && typeof c.note !== 'string') return false;
+  return true;
+}
+
+function formatCompletenessDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/** Reader-facing wording for a dated completeness claim (boilerplate only; note is separate). */
+export function completenessStatement(c: ListCompleteness, subject: 'person' | 'organization'): string {
+  const date = formatCompletenessDate(c.asserted);
+  return subject === 'organization'
+    ? `As of ${date}, every account we publish on this profile is listed below.`
+    : `As of ${date}, every account I publish on this profile is listed below.`;
+}
+
+/** Short clarifier shown under the statement; not part of the signed claim. */
+export function completenessClarifier(): string {
+  return 'Accounts not shown here are not part of this published list. That does not by itself mean they are impersonators.';
+}
+
+/** Label for the optional owner-written note on profile and verify pages. */
+export function completenessNoteLabel(subject: 'person' | 'organization'): string {
+  return subject === 'organization' ? 'In our words' : 'In my words';
+}
+
+// Whether the owner wants this identity PUBLISHED. It is in the signed manifest,
+// and that placement is the whole design: the key authorizes hiding, so a stolen
+// login cannot take someone's profile down, for exactly the reason a login
+// cannot rename or delete one.
+//
+// Read the word narrowly. 'private' is a request not to PUBLISH, never a claim
+// of erasure, and the copy around it must say so:
+//
+//  - We stop serving the profile page, realhandles.json, the OG card, and the
+//    directory listing. That is the part we control and can honor.
+//  - The signed history at /<handle>/realhandles-chain.json KEEPS SERVING.
+//    Withholding verification data because someone asked would make us the
+//    gatekeeper of who can be verified, which is the one role this product
+//    exists to refuse, and every version's hash is already committed to Bitcoin
+//    by OpenTimestamps, so erasure is a promise we could not keep even if we
+//    wanted to make it.
+//  - A verifier reading the chain therefore sees a signed statement that the
+//    owner asked for privacy, and can choose to respect it. That is a better
+//    outcome than a 404, which tells a reader nothing and would look identical
+//    to us having lost the data.
+//
+// Absent means public. Every manifest signed before this field existed omits it,
+// and the safe reading of an absent field is the state those identities are
+// already in.
+export type Visibility = 'public' | 'private';
+
+/**
+ * Exported so the server enforces the same values it publishes. Anything other
+ * than these two is refused at POST /api/manifest rather than stored and
+ * guessed about later: a visibility nobody can interpret is worse than none,
+ * because the guess decides whether a real person's page is up.
+ */
+export function isValidVisibility(v: unknown): v is Visibility {
+  return v === 'public' || v === 'private';
+}
+
+/**
+ * Should this manifest be published? Reads the SIGNED payload, never the mirror.
+ *
+ * Fails closed on anything it does not recognize. An unknown value means the
+ * owner signed a request we do not implement (a future 'unlisted', say), and the
+ * conservative answer to "publish this person or not" is no. Only the owner's
+ * own key can put a value here, so failing closed can never be used against
+ * them by anyone else.
+ *
+ * Its caller `isHiddenJws` in lib/visibility.ts fails OPEN, and the two pointing
+ * opposite ways is deliberate, not an inconsistency to tidy up. The difference
+ * is what the input can prove. Here the input is a manifest whose signature was
+ * checked, so an odd value is a statement the owner MADE and gets the reading
+ * that respects it. There the input is a string that would not decode at all,
+ * which is no statement about anybody, and treating it as a request to hide
+ * would take profiles down over a parse failure. Change one and you must decide
+ * about the other; do not make them match for symmetry.
+ */
+export function isHiddenManifest(m: { visibility?: unknown } | null | undefined): boolean {
+  const v = m?.visibility;
+  if (v === undefined || v === null) return false;
+  return v !== 'public';
 }
 
 // A "pointer" anchor file: signed once, hosted once, never needs updating. It
@@ -188,6 +317,11 @@ export interface Manifest {
   };
   accounts: ClaimedAccount[];
   disavowed?: Disavowal[]; // signed "not me" statements (impersonators, absences)
+  listCompleteness?: ListCompleteness; // dated claim that accounts is exhaustive as of asserted
+  // Whether the owner wants this identity published. Signed, so hiding takes the
+  // key and not merely a session. Absent means public. See Visibility: this is a
+  // request not to publish, and the signed history keeps serving regardless.
+  visibility?: Visibility;
   anchor?: Anchor; // one rotatable pointer; NOT the identity
   issued: string; // ISO 8601
   statement: string; // human-readable claim
@@ -364,7 +498,7 @@ export async function verifyChain(
   // The recovery policy in force, taken from the last entry we accepted. A
   // recovery is judged against what the identity had ALREADY committed to before
   // it happened, never against the policy the recovering entry declares for
-  // itself, which an attacker would otherwise just write in their own favour.
+  // itself, which an attacker would otherwise just write in their own favor.
   let trustedRecovery: RecoveryPolicy | undefined;
   let genesisKeyId: string | undefined;
   let prevHash: string | null = null;

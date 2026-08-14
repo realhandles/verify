@@ -404,6 +404,18 @@ export function prettyPageUrl(u: string): string {
   }
 }
 
+/** Whether a stored profile URL is real enough to show as a link. */
+export function linkableProfileUrl(profileUrl: string | undefined | null, platform?: string): string | null {
+  const u = (profileUrl ?? '').trim();
+  if (!u || !/^https?:\/\//i.test(u)) return null;
+  if (platform) {
+    const plat = platform.trim().toLowerCase();
+    const bare = u.replace(/\/+$/, '').toLowerCase();
+    if (bare === `https://${plat}` || bare === `http://${plat}`) return null;
+  }
+  return u;
+}
+
 export function cleanDomain(domain: string): string {
   return domain
     .trim()
