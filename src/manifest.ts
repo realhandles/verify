@@ -28,6 +28,26 @@ export interface ClaimedAccount {
   profileUrl: string;
   method: 'oauth' | 'domain-anchor' | 'proof-post';
   verifiedAt: string; // ISO 8601
+  // The platform's own IMMUTABLE id for this account, where the verification had
+  // one to record (GitHub/Discord/Twitch/GitLab/Dribbble account ids, a Bluesky
+  // DID, a nostr pubkey). The handle beside it is a mutable LABEL.
+  //
+  // WHY IT IS SIGNED. A handle can change hands. Verify x:cursor today, and when
+  // the name later moves to somebody else nothing about a handle-bound record
+  // notices: the manifest still says `cursor`, the profile still reads Verified,
+  // and we publish a verified link to a stranger's account. Signing the id makes
+  // that drift detectable rather than merely dateable, because the id and the
+  // handle can then be compared against what the server verified. See
+  // lib/crosscheck.ts, which decides what a disagreement means.
+  //
+  // OPTIONAL, and permanently so. Absent means "verified before we recorded
+  // this, or by a method that has no id at all", never "suspect". A posted
+  // token, a bio token and a mutual rel="me" page carry only a handle and a URL,
+  // so those accounts stay handle-bound; do not read an absent id as a mismatch.
+  // Additive to the wire format on purpose: every manifest signed before this
+  // field existed still verifies unchanged, since verification checks the
+  // signature over the payload bytes and never rejects a field it does not know.
+  accountId?: string;
   // For accounts that are an organization or a server the person owns/runs
   // rather than a personal profile: what it is, and its own logo/icon. Lets a
   // reader tell "the lilAgents GitHub org" apart from "a person named lilagents".
