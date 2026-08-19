@@ -361,7 +361,17 @@ export function isHardReserved(username: string): boolean {
 
 export function normalizeHandle(s: string): string {
   // Strip a leading @ (and any spaces) so users can type "@name" or "name".
-  return s.trim().replace(/^@+/, '').toLowerCase();
+  //
+  // SLASHES GO TOO, at both ends, and that rule is here because its absence
+  // reached production: a claimed account rendered as "/davidvkimball on Build
+  // in public" on 2026-08-19. Nothing addressable is called "/name". What
+  // produces one is somebody pasting a URL path into a handle field, which is an
+  // ordinary thing to do and was silently kept because the @ rule lived here and
+  // this one did not.
+  //
+  // Only the ENDS are trimmed. A handle with an interior slash is a different
+  // mistake, and rewriting "a/b" into "ab" would invent an account nobody typed.
+  return s.trim().replace(/^[@/]+/, '').replace(/\/+$/, '').trim().toLowerCase();
 }
 
 // Pretty display names for platforms whose icon key does not capitalize nicely
