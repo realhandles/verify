@@ -78,7 +78,7 @@ export const RESERVED_WORDS = new Set([
   // Current page slugs (a static page shadows a [username] match, so these must
   // never be claimable) plus a curated set reserved for likely future pages, so
   // we can ship them without bumping anyone off an already-claimed handle.
-  'directory', 'spec', 'compare', 'report', 'settings', 'account', 'dashboard',
+  'directory', 'spec', 'compare', 'report', 'build', 'settings', 'account', 'dashboard',
   'contact', 'pricing', 'faq', 'explore', 'search', 'discover', 'profile', 'me',
   'home', 'new', 'edit', 'onboarding', 'welcome',
   // Privileged-sounding roles. A handle only has to LOOK like staff to work as
