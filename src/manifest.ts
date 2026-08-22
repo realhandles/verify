@@ -576,7 +576,7 @@ export async function verifyChain(
         }
       } else if (rot.recovery?.length) {
         if (!isValidRecoveryPolicy(trustedRecovery)) {
-          return { valid: false, complete: false, startsAt, reason: `Entry ${i}: recovery attempted but the identity had designated no recovery keys.`, length: entries.length };
+          return { valid: false, complete: false, startsAt, reason: `Entry ${i}: recovery attempted but the identity had designated no Emergency Kit.`, length: entries.length };
         }
         const approvals = await countRecoveryApprovals(trustedRecovery, rot.recovery, entryKeyId, seq, prev);
         if (approvals < trustedRecovery.threshold) {
