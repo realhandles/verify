@@ -165,6 +165,54 @@ export function completenessNoteLabel(subject: 'person' | 'organization'): strin
 // Absent means public. Every manifest signed before this field existed omits it,
 // and the safe reading of an absent field is the state those identities are
 // already in.
+// A signed statement by one identity that another is who they say they are.
+//
+// MUTUAL BY CONSTRUCTION, and that is the mechanism rather than a courtesy. The
+// voucher publishes the vouch; the SUBJECT publishes acceptance. Neither half
+// alone shows anything, so nobody can attach themselves to somebody else's
+// profile, and an unwanted vouch from a bad actor is a thing that never appears
+// rather than a thing you have to disavow. It is the same two-way binding the
+// rel="me" proof already runs on: the owner lists the page AND the page links
+// back, and one direction is worth nothing.
+//
+// BOUND TO THE KEY, NEVER THE HANDLE, for the reason `accountId` exists. A
+// handle can change hands; a vouch that followed the name would silently
+// transfer to whoever holds it next, which is the one move available to the
+// person who just took it.
+//
+// WORTH ZERO in the trust score, deliberately, and see docs/queue.md item 21.
+// The mechanism is easy and the WEIGHTING is the hard part: vouches from
+// identities anyone can mint are worth nothing, so weighting needs a graph that
+// this directory is too young and too small to supply. A claim already lives
+// under the same rule, buying a listing and exactly no points. Do not add a
+// vouch count to computeTrustScore, to the directory sort, or to
+// directory-index.json without deciding the Sybil model first.
+export interface Vouch {
+  keyId: string; // the SUBJECT's keyId, the account being vouched for
+  handle?: string; // the subject's handle AT VOUCH TIME; a display label only
+  note?: string; // short, optional: how the voucher knows them
+  at: string; // ISO 8601
+}
+
+// The subject's half. `keyId` is the VOUCHER's key: the person whose vouch is
+// being accepted. Removing an entry and re-signing withdraws acceptance, and
+// the chain keeps the earlier version, so a withdrawal is history rather than
+// erasure.
+export interface VouchAcceptance {
+  keyId: string; // the VOUCHER's keyId
+  at: string; // ISO 8601
+}
+
+export function isValidVouch(v: Vouch | undefined): v is Vouch {
+  if (!v || typeof v.keyId !== 'string' || !v.keyId.trim()) return false;
+  return typeof v.at === 'string' && !!v.at.trim();
+}
+
+export function isValidVouchAcceptance(a: VouchAcceptance | undefined): a is VouchAcceptance {
+  if (!a || typeof a.keyId !== 'string' || !a.keyId.trim()) return false;
+  return typeof a.at === 'string' && !!a.at.trim();
+}
+
 export type Visibility = 'public' | 'private';
 
 /**
@@ -338,6 +386,11 @@ export interface Manifest {
   accounts: ClaimedAccount[];
   disavowed?: Disavowal[]; // signed "not me" statements (impersonators, absences)
   listCompleteness?: ListCompleteness; // dated claim that accounts is exhaustive as of asserted
+  // Identities this one vouches FOR. Half of a mutual pair: see Vouch.
+  vouches?: Vouch[];
+  // Vouchers this identity has ACCEPTED. The other half. A vouch shows on a
+  // profile only when both halves exist, so neither side can publish the other.
+  acceptedVouches?: VouchAcceptance[];
   // Whether the owner wants this identity published. Signed, so hiding takes the
   // key and not merely a session. Absent means public. See Visibility: this is a
   // request not to publish, and the signed history keeps serving regardless.
