@@ -371,7 +371,53 @@ export function normalizeHandle(s: string): string {
   //
   // Only the ENDS are trimmed. A handle with an interior slash is a different
   // mistake, and rewriting "a/b" into "ab" would invent an account nobody typed.
+  // An interior @ (Lightning Address, contact email) is kept on purpose.
   return s.trim().replace(/^[@/]+/, '').replace(/\/+$/, '').trim().toLowerCase();
+}
+
+/**
+ * Platforms whose handle is already an address (`local@domain`), not a @username.
+ * Prefixing another @ would read as `@send@example.com`.
+ */
+export function isAddressHandle(platform?: string): boolean {
+  const p = (platform ?? '').toLowerCase().trim();
+  return p === 'lightning' || p === 'email';
+}
+
+/**
+ * Payment / wallet platforms whose handle a visitor may want to copy on a public
+ * profile. Contact email is out: it uses click-to-reveal, then mailto / copy.
+ */
+const PAYMENT_PLATFORMS = new Set([
+  'ethereum', 'bitcoin', 'ens', 'lightning', 'solana',
+  'polygon', 'base', 'other',
+]);
+
+/** Messaging platforms with no reliable public deep link from the username alone. */
+const COPY_ONLY_PLATFORMS = new Set(['signal', 'whatsapp']);
+
+export function isPaymentPlatform(platform?: string): boolean {
+  return PAYMENT_PLATFORMS.has((platform ?? '').toLowerCase().trim());
+}
+
+/**
+ * Text to put on the clipboard for a public-profile row, or null when that row
+ * should not offer copy (ordinary social links already open in a new tab).
+ */
+export function profileCopyText(platform: string | undefined, handle: string | undefined): string | null {
+  const h = (handle ?? '').trim();
+  if (!h) return null;
+  const p = (platform ?? '').toLowerCase().trim();
+  if (PAYMENT_PLATFORMS.has(p) || COPY_ONLY_PLATFORMS.has(p)) return h;
+  return null;
+}
+
+/** How a proof row's handle reads in copy: `@name` or the bare address. */
+export function displayHandle(platform: string | undefined, handle: string): string {
+  const h = (handle ?? '').trim();
+  if (!h) return '';
+  if (isAddressHandle(platform) || h.includes('@')) return h;
+  return `@${normalizeHandle(h)}`;
 }
 
 // Pretty display names for platforms whose icon key does not capitalize nicely
@@ -387,7 +433,10 @@ const PLATFORM_LABELS: Record<string, string> = {
   gitlab: 'GitLab', bitbucket: 'Bitbucket', letterboxd: 'Letterboxd', orcid: 'ORCID',
   hackerrank: 'HackerRank', slideshare: 'SlideShare', xing: 'XING', discourse: 'Discourse',
   flipboard: 'Flipboard', audible: 'Audible', quora: 'Quora', scribd: 'Scribd',
-  ethereum: 'Ethereum', bitcoin: 'Bitcoin', ens: 'ENS',
+  ethereum: 'Ethereum', bitcoin: 'Bitcoin', ens: 'ENS', solana: 'Solana',
+  polygon: 'Polygon', base: 'Base', other: 'Other wallet',
+  lightning: 'Lightning', email: 'Email',
+  signal: 'Signal', whatsapp: 'WhatsApp', telegram: 'Telegram',
 };
 
 /** Display label for a platform, e.g. "x" -> "X", "github" -> "GitHub". */
@@ -426,6 +475,28 @@ export function linkableProfileUrl(profileUrl: string | undefined | null, platfo
   return u;
 }
 
+/**
+ * Href for a listed account. Prefer a stored https URL. Contact email does
+ * NOT get mailto: here: the public profile click-to-reveals first. Use
+ * emailMailto once the address is shown.
+ */
+export function accountLink(opts: {
+  platform?: string;
+  handle?: string;
+  profileUrl?: string | null;
+}): string | null {
+  const plat = (opts.platform ?? '').trim().toLowerCase();
+  if (plat === 'email') return null;
+  return linkableProfileUrl(opts.profileUrl, opts.platform);
+}
+
+/** mailto: for a contact-email handle, once the caller has decided to show it. */
+export function emailMailto(handle: string | undefined): string | null {
+  const h = (handle ?? '').trim().toLowerCase();
+  if (h.includes('@') && !/\s/.test(h)) return `mailto:${h}`;
+  return null;
+}
+
 export function cleanDomain(domain: string): string {
   return domain
     .trim()
@@ -460,6 +531,9 @@ export const VERIFIED_METHODS = new Set([
   // control directly. No platform is asked and no page is read, which puts it
   // alongside the wallet and domain proofs rather than the bio-reading ones.
   'nostr-signature',
+  // Lightning Address (LUD-16): the domain's /.well-known/lnurlp/<local> answers
+  // as LNURL-pay. Same shape wallets already resolve; no private key involved.
+  'lnurl-proof',
 ]);
 
 /** True when a first party confirmed the account (vs. a claim / URL-control proof). */
@@ -482,7 +556,9 @@ export function isVerifiedMethod(method: string): boolean {
  * it is being exploited.
  */
 export function isNameGatingMethod(method: string): boolean {
-  return isVerifiedMethod(method) && method !== 'rel-me';
+  // lnurl-proof is Verified for display, but a Lightning Address is not a
+  // namesake proof for a scarce handle (the local part is not the @username).
+  return isVerifiedMethod(method) && method !== 'rel-me' && method !== 'lnurl-proof';
 }
 
 /** Strength of one proof for a given desired username. 0 means it does not match. */
