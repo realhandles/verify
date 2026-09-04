@@ -53,16 +53,23 @@ export function manifestKey(p: HandleShape): string {
 export const KEY_PLATFORMS: Record<string, { label: string; tier: 1 | 2; oauth: boolean; live: boolean }> = {
   x: { label: 'X', tier: 1, oauth: false, live: true }, // verified free via tweet + oEmbed
   bluesky: { label: 'Bluesky', tier: 1, oauth: false, live: true }, // via public atproto API
-  youtube: { label: 'YouTube', tier: 1, oauth: false, live: true }, // via proof-post
+  youtube: { label: 'YouTube', tier: 1, oauth: true, live: true }, // OAuth, or proof-post where the channel has no handle
   instagram: { label: 'Instagram', tier: 1, oauth: false, live: true },
   tiktok: { label: 'TikTok', tier: 1, oauth: false, live: true },
   linkedin: { label: 'LinkedIn', tier: 1, oauth: false, live: true },
   github: { label: 'GitHub', tier: 2, oauth: true, live: true },
   discord: { label: 'Discord', tier: 2, oauth: true, live: true },
   twitch: { label: 'Twitch', tier: 2, oauth: true, live: true },
-  reddit: { label: 'Reddit', tier: 2, oauth: false, live: false }, // disabled: Reddit blocks unauthenticated reads; waiting on API access
+  // Reddit was off because it blocks unauthenticated reads, which killed the
+  // bio-token route. OAuth asks the account itself and sidesteps that entirely.
+  reddit: { label: 'Reddit', tier: 2, oauth: true, live: true },
   dribbble: { label: 'Dribbble', tier: 2, oauth: true, live: true },
   gitlab: { label: 'GitLab', tier: 2, oauth: true, live: true },
+  spotify: { label: 'Spotify', tier: 2, oauth: true, live: true },
+  patreon: { label: 'Patreon', tier: 2, oauth: true, live: true },
+  stackoverflow: { label: 'Stack Overflow', tier: 2, oauth: true, live: true },
+  bitbucket: { label: 'Bitbucket', tier: 2, oauth: true, live: true },
+  figma: { label: 'Figma', tier: 2, oauth: true, live: true },
 };
 
 // TLD ranking. .com is deliberately on top, per the design.
