@@ -539,9 +539,7 @@ export const VERIFIED_METHODS = new Set([
   // control directly. No platform is asked and no page is read, which puts it
   // alongside the wallet and domain proofs rather than the bio-reading ones.
   'nostr-signature',
-  // Lightning Address (LUD-16): the domain's /.well-known/lnurlp/<local> answers
-  // as LNURL-pay. Same shape wallets already resolve; no private key involved.
-  'lnurl-proof',
+  // NOT 'lnurl-proof', which was here until 2026-11-25. It checks that a Lightning Address answers as LNURL-pay, which anybody can check about anybody's address, so anyone could add someone else's address and get a Verified badge. LUD-16 has no ownership challenge, so a Lightning Address is Claimed until there is a real one.
 ]);
 
 /** True when a first party confirmed the account (vs. a claim / URL-control proof). */
@@ -564,9 +562,7 @@ export function isVerifiedMethod(method: string): boolean {
  * it is being exploited.
  */
 export function isNameGatingMethod(method: string): boolean {
-  // lnurl-proof is Verified for display, but a Lightning Address is not a
-  // namesake proof for a scarce handle (the local part is not the @username).
-  return isVerifiedMethod(method) && method !== 'rel-me' && method !== 'lnurl-proof';
+  return isVerifiedMethod(method) && method !== 'rel-me';
 }
 
 /** Strength of one proof for a given desired username. 0 means it does not match. */
